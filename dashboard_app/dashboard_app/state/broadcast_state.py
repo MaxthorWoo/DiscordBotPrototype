@@ -13,12 +13,11 @@ from shared_lib.models import (
     SCHEDULE_IMMEDIATE, SCHEDULE_TIMED,
     STATUS_DRAFT, STATUS_PENDING,
 )
+from .bot_state import BotState
 
 
-class BroadcastState(rx.State):
-    # ── Bot / Guild ────────────────────────────────────
-    current_bot_id: str = ""
-    bots_list: list[dict] = []
+class BroadcastState(BotState):
+    # ── Guild（current_bot_id / bots_list 来自 BotState 全局单一事实源）──
     selected_guild_id: str = ""
     guilds_list: list[dict] = []
 
@@ -188,10 +187,8 @@ class BroadcastState(rx.State):
         if self.is_loaded:
             return  # 避免重复加载
 
-        bots = crud.get_active_bots()
-        self.bots_list = [{"bot_id": b[0], "bot_name": b[1]} for b in bots] if bots else []
-        if self.bots_list:
-            self.current_bot_id = self.bots_list[0]["bot_id"]
+        await self.load_bots()  # 加载全局 bot 列表并校准 current_bot_id
+        if self.current_bot_id:
             await self._load_guilds()
         self.is_loaded = True
 
@@ -204,13 +201,13 @@ class BroadcastState(rx.State):
 
     # ── 选择 Bot ──
     async def on_bot_change(self, bot_id: str):
-        self.current_bot_id = bot_id
         self.selected_guild_id = ""
         self.channels_text = []
         self.channels_forum = []
         self.channels_threads = []
         self.member_cache = []
         self.guilds_list = []
+        await self.select_bot(bot_id)  # 全局切换 + 重新加载当前 bot 信息
         await self._load_guilds()
 
     # ── 选择服务器 ──

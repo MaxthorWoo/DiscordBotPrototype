@@ -24,6 +24,7 @@ class Bot(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_seen = Column(DateTime, nullable=True)   # 最近一次心跳时间（用于在线监控）
     last_latency_ms = Column(Integer, nullable=True)  # 最近一次上报的延迟(ms)
+    last_error = Column(Text, nullable=True)       # 最近一次启动失败的原因（供后台展示）
 
 # 服务器配置表（演示“按服务器隔离”）
 class GuildConfig(Base):

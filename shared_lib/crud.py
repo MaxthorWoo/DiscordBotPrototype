@@ -114,15 +114,29 @@ def migrate_bot_heartbeat():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE bots ADD COLUMN last_latency_ms INTEGER"))
                 added.append("last_latency_ms")
+        if "last_error" not in cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE bots ADD COLUMN last_error TEXT"))
+                added.append("last_error")
         if added:
             with engine.connect() as conn:
+                # 强制 WAL checkpoint，确保多进程（run.py / Reflex）都能立即看到新列，
+                # 避免 ALTER 停留在 WAL 中导致其他连接报 no such column
+                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
                 conn.commit()
             print(f"[DB] bots 表心跳列迁移完成: {added}")
     except Exception as e:
         print(f"[DB] migrate_bot_heartbeat 失败: {e}")
 
 
-# ----- Bot 相关（V1 只做初始化插入）-----
+# 模块导入时即执行一次迁移（确保所有进程：run.py / Reflex 子进程启动时都具备最新表结构）
+try:
+    migrate_bot_heartbeat()
+except Exception:
+    pass
+
+
+# ----- Bot 相关 -----
 def init_default_bot():
     """启动时调用，确保默认机器人存在（token 留空等待用户配置）"""
     session = SessionLocal()
@@ -137,6 +151,50 @@ def init_default_bot():
             session.add(default_bot)
             session.commit()
             print(f"[DB] 初始化默认机器人: {DEFAULT_BOT_ID}")
+    finally:
+        session.close()
+
+
+def generate_bot_id() -> str:
+    """生成一个唯一的 bot_id（形如 bot_xxxx，避免与 default_bot 冲突）"""
+    import string
+    session = SessionLocal()
+    try:
+        while True:
+            suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            candidate = f"bot_{suffix}"
+            if not session.query(Bot).filter_by(bot_id=candidate).first():
+                return candidate
+    finally:
+        session.close()
+
+
+def create_bot(bot_name: str) -> str | None:
+    """新增一个机器人记录（is_active=False，等待用户填 Token 激活）。
+
+    返回新创建的 bot_id；若 bot_name 已存在则复用已有记录并返回其 bot_id。
+    """
+    name = (bot_name or "").strip() or "未命名机器人"
+    session = SessionLocal()
+    try:
+        existing = session.query(Bot).filter_by(bot_name=name).first()
+        if existing:
+            return existing.bot_id
+        bot_id = generate_bot_id()
+        bot = Bot(
+            bot_id=bot_id,
+            bot_name=name,
+            token_encrypted="",
+            is_active=False,
+        )
+        session.add(bot)
+        session.commit()
+        print(f"[DB] 新增机器人: {bot_id} ({name})")
+        return bot_id
+    except Exception as e:
+        session.rollback()
+        print(f"[DB] create_bot 失败: {e}")
+        return None
     finally:
         session.close()
 
@@ -178,6 +236,46 @@ def update_bot(bot_id: str, bot_name: str, token: str) -> bool:
         session.rollback()
         print(f"[DB] update_bot 失败: {e}")
         return False
+    finally:
+        session.close()
+
+
+def set_bot_active(bot_id: str, active: bool) -> bool:
+    """设置机器人启停状态。
+
+    active=True  -> 标记在线，run.py 热加载会自动拉起进程；
+    active=False -> 标记停止，run.py 会终止对应进程。
+    未配置 Token 时不允许启动（返回 False）。
+    """
+    session = SessionLocal()
+    try:
+        bot = session.query(Bot).filter_by(bot_id=bot_id).first()
+        if not bot:
+            return False
+        if active and not (bot.token_encrypted and bot.token_encrypted.strip()):
+            return False  # 没有 Token 无法启动
+        bot.is_active = active
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        print(f"[DB] set_bot_active 失败: {e}")
+        return False
+    finally:
+        session.close()
+
+
+def set_bot_error(bot_id: str, error: str = None):
+    """记录机器人最近一次启动失败原因（供后台展示）；传入 None 可清除错误"""
+    session = SessionLocal()
+    try:
+        bot = session.query(Bot).filter_by(bot_id=bot_id).first()
+        if bot:
+            bot.last_error = error
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[DB] set_bot_error 失败: {e}")
     finally:
         session.close()
 
@@ -261,6 +359,7 @@ def get_bot_status(bot_id: str = None) -> dict:
             "seconds_since": seconds_since,
             "uptime_hours": uptime_hours,
             "guild_count": session.query(Guild).filter_by(bot_id=bot_id).count(),
+            "last_error": row.last_error,
         }
     finally:
         session.close()
@@ -1115,6 +1214,17 @@ def get_active_bots() -> list[tuple]:
     session = SessionLocal()
     try:
         bots = session.query(Bot).filter_by(is_active=True).all()
+        return [(b.bot_id, b.bot_name) for b in bots]
+    finally:
+        session.close()
+
+
+def get_all_bots() -> list[tuple]:
+    """获取所有 Bot 列表（含未激活），返回 [(bot_id, bot_name), ...]，
+    供后台机器人管理弹窗显示与切换（未激活的也可切回配置）"""
+    session = SessionLocal()
+    try:
+        bots = session.query(Bot).order_by(Bot.bot_id).all()
         return [(b.bot_id, b.bot_name) for b in bots]
     finally:
         session.close()

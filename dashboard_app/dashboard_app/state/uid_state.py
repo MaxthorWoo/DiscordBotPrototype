@@ -5,6 +5,7 @@ from typing import Optional
 import reflex as rx
 from shared_lib import crud
 from pydantic import BaseModel
+from .bot_state import BotState
 
 
 class UIDCampaignItem(BaseModel):
@@ -67,7 +68,7 @@ class ScanTaskItem(BaseModel):
     out_of_window: int = 0
 
 
-class UIDState(rx.State):
+class UIDState(BotState):
     # ===== 列表页 =====
     campaigns: list[UIDCampaignItem] = []
     loading: bool = False
@@ -112,7 +113,7 @@ class UIDState(rx.State):
     error: str = ""
 
     def _bot_id(self) -> str:
-        return crud.DEFAULT_BOT_ID
+        return self.current_bot_id
 
     # ===== 通用 =====
     async def _flash_auto(self, message: str, is_error: bool = False):

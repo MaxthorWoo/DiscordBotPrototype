@@ -120,90 +120,410 @@ def nav_section() -> rx.Component:
     )
 
 
-# ── Bot 设置弹窗 ─────────────────────────────────────────
-def bot_settings_dialog() -> rx.Component:
-    """设置 Bot 的弹窗表单"""
-    return rx.dialog.root(
-        rx.dialog.content(
-            rx.dialog.title("Bot 设置"),
-            rx.dialog.description(
-                "在此配置你的 Discord Bot，绑定后即可使用平台的全部功能",
-                size="2",
-                margin_bottom="4",
-            ),
-            # 表单
-            rx.vstack(
-                # Bot 名称
-                rx.vstack(
-                    rx.text("Bot 名称", font_weight="bold", font_size="sm"),
-                    rx.input(
-                        placeholder="例如：我的交易Bot",
-                        value=BotState._bot_name_input,
-                        on_change=BotState.set_bot_name,
-                        width="100%",
+# ── 统一机器人管理弹窗 ─────────────────────────────────
+def bot_manager_dialog() -> rx.Component:
+    """机器人管理弹窗：左侧机器人列表（点击切换），右侧逐字段行内编辑名称与 Token。
+
+    点击列表里的某个机器人 = 整个后台切换到该机器人的管理平台（current_bot_id 全局生效）。
+    新增机器人走二级弹窗，填写名称与 Token 后回到一级弹窗。
+    """
+    return rx.fragment(
+        # ════ 一级弹窗：机器人管理 ════
+        rx.dialog.root(
+            rx.dialog.content(
+                rx.dialog.title("机器人管理"),
+                rx.dialog.description(
+                    "点击左侧任意机器人即可切换整个后台到该机器人的管理平台；"
+                    "右侧可逐行编辑其名称与 Token，保存即生效并自动上线",
+                    size="2",
+                    margin_bottom="6",
+                ),
+                # 主体：左列表 + 右编辑
+                rx.hstack(
+                    # ── 左：机器人列表 ──
+                    rx.vstack(
+                        rx.text("机器人列表", font_weight="bold", font_size="md", margin_bottom="2"),
+                        rx.scroll_area(
+                            rx.vstack(
+                                rx.foreach(
+                                    BotState.bots_list,
+                                    lambda bot: rx.hstack(
+                                        rx.box(
+                                            width="8px",
+                                            height="8px",
+                                            border_radius="50%",
+                                            background=rx.cond(
+                                                bot["status"] == "online",
+                                                "var(--green-9)",
+                                                rx.cond(
+                                                    bot["status"] == "offline",
+                                                    "var(--yellow-9)",
+                                                    rx.cond(
+                                                        bot["status"] == "stopped",
+                                                        "var(--gray-8)",
+                                                        "var(--red-9)",  # unconfigured / error
+                                                    ),
+                                                ),
+                                            ),
+                                            flex_shrink="0",
+                                        ),
+                                        rx.vstack(
+                                            rx.text(
+                                                bot["bot_name"],
+                                                font_size="sm",
+                                                color=rx.cond(
+                                                    bot["bot_id"] == BotState.current_bot_id,
+                                                    "var(--plum-11)",
+                                                    "var(--gray-12)",
+                                                ),
+                                                font_weight=rx.cond(
+                                                    bot["bot_id"] == BotState.current_bot_id,
+                                                    "600",
+                                                    "400",
+                                                ),
+                                            ),
+                                            rx.text(
+                                                rx.cond(
+                                                    bot["status"] == "online", "运行中",
+                                                    rx.cond(
+                                                        bot["status"] == "offline", "离线（进程异常）",
+                                                        rx.cond(
+                                                            bot["status"] == "stopped", "已停止",
+                                                            rx.cond(
+                                                                bot["status"] == "error", "启动失败",
+                                                                "未配置 Token",
+                                                            ),
+                                                        ),
+                                                    ),
+                                                ),
+                                                font_size="xs",
+                                                color="var(--gray-10)",
+                                            ),
+                                            rx.cond(
+                                                bot["status"] == "error",
+                                                rx.text(
+                                                    rx.cond(
+                                                        bot["error"] != "",
+                                                        bot["error"],
+                                                        "启动失败，请检查 Token 与 Discord 应用权限",
+                                                    ),
+                                                    font_size="xs",
+                                                    color="var(--red-10)",
+                                                    max_width="150px",
+                                                    white_space="normal",
+                                                ),
+                                                rx.fragment(),
+                                            ),
+                                            spacing="0",
+                                            align="start",
+                                        ),
+                                        rx.spacer(),
+                                        # 启动/停止按钮
+                                        rx.cond(
+                                            bot["status"] == "unconfigured",
+                                            rx.tooltip(
+                                                rx.icon("circle-alert", size=14, color="var(--red-9)"),
+                                                content="需先配置 Token",
+                                            ),
+                                            rx.cond(
+                                                bot["status"] == "online",
+                                                rx.icon_button(
+                                                    rx.icon("power-off", size=14),
+                                                    on_click=BotState.stop_bot(bot["bot_id"]),
+                                                    variant="ghost",
+                                                    color_scheme="gray",
+                                                    size="1",
+                                                    cursor="pointer",
+                                                ),
+                                                rx.icon_button(
+                                                    rx.icon("power", size=14),
+                                                    on_click=BotState.start_bot(bot["bot_id"]),
+                                                    variant="ghost",
+                                                    color_scheme="green",
+                                                    size="1",
+                                                    cursor="pointer",
+                                                ),
+                                            ),
+                                        ),
+                                        spacing="2",
+                                        align="center",
+                                        width="100%",
+                                        padding="0.5rem 0.7rem",
+                                        border_radius="md",
+                                        background=rx.cond(
+                                            bot["bot_id"] == BotState.current_bot_id,
+                                            "rgba(171, 74, 186, 0.16)",
+                                            "transparent",
+                                        ),
+                                        cursor="pointer",
+                                        on_click=BotState.select_bot(bot["bot_id"]),
+                                    ),
+                                ),
+                                spacing="1",
+                                width="100%",
+                            ),
+                            max_height="340px",
+                            width="100%",
+                        ),
+                        # 新增机器人（仅按钮，点击弹出二级弹窗）
+                        rx.button(
+                            "＋ 新增机器人",
+                            color_scheme="green",
+                            variant="soft",
+                            cursor="pointer",
+                            width="100%",
+                            margin_top="3",
+                            on_click=BotState.open_add_dialog,
+                        ),
+                        spacing="2",
+                        width="240px",
+                        padding_right="4",
+                        padding_top="2",
+                        border_right="1px solid var(--gray-5)",
                     ),
-                    spacing="1",
+                    # ── 右：选中机器人编辑区 ──
+                    rx.vstack(
+                        rx.text("当前机器人配置", font_weight="bold", font_size="md", margin_bottom="4"),
+                        rx.cond(
+                            BotState.is_loaded,
+                            rx.vstack(
+                                # ── Bot 名称行（展示/编辑）──
+                                rx.cond(
+                                    BotState.editing_name,
+                                    # 编辑态
+                                    rx.vstack(
+                                        rx.text("Bot 名称", font_size="sm", color="var(--gray-11)"),
+                                        rx.input(
+                                            placeholder="例如：我的交易Bot",
+                                            value=BotState.bot_name_input,
+                                            on_change=BotState.set_bot_name,
+                                            width="100%",
+                                        ),
+                                        rx.hstack(
+                                            rx.button(
+                                                "保存",
+                                                color_scheme="green",
+                                                cursor="pointer",
+                                                on_click=BotState.save_name,
+                                            ),
+                                            rx.button(
+                                                "取消",
+                                                variant="ghost",
+                                                cursor="pointer",
+                                                on_click=BotState.cancel_name,
+                                            ),
+                                            spacing="2",
+                                        ),
+                                        spacing="2",
+                                        width="100%",
+                                    ),
+                                    # 展示态
+                                    rx.hstack(
+                                        rx.vstack(
+                                            rx.text("Bot 名称", font_size="sm", color="var(--gray-11)"),
+                                            rx.text(
+                                                BotState.bot_name,
+                                                font_size="md",
+                                                font_weight="bold",
+                                            ),
+                                            spacing="1",
+                                            align="start",
+                                        ),
+                                        rx.spacer(),
+                                        rx.icon_button(
+                                            "pencil",
+                                            on_click=BotState.edit_name,
+                                            size="1",
+                                            variant="ghost",
+                                            color_scheme="gray",
+                                            cursor="pointer",
+                                            aria_label="编辑名称",
+                                        ),
+                                        align="center",
+                                        width="100%",
+                                    ),
+                                ),
+                                # ── Bot Token 行（展示/编辑）──
+                                rx.cond(
+                                    BotState.editing_token,
+                                    # 编辑态
+                                    rx.vstack(
+                                        rx.text("Bot Token", font_size="sm", color="var(--gray-11)"),
+                                        rx.cond(
+                                            BotState.token_mask != "",
+                                            rx.callout(
+                                                rx.fragment(
+                                                    rx.icon("shield-check", size=14),
+                                                    rx.text(
+                                                        f"{BotState.token_mask} 已配置，留空则保留原 Token",
+                                                        font_size="xs",
+                                                    ),
+                                                ),
+                                                color_scheme="green",
+                                                size="1",
+                                                width="100%",
+                                            ),
+                                            rx.text(
+                                                "在 Discord Developer Portal → Bot 页面获取",
+                                                font_size="xs",
+                                                color="gray",
+                                            ),
+                                        ),
+                                        rx.input(
+                                            placeholder="输入或更新你的 Bot Token...",
+                                            value=BotState.bot_token_input,
+                                            on_change=BotState.set_bot_token,
+                                            type="password",
+                                            width="100%",
+                                        ),
+                                        rx.hstack(
+                                            rx.button(
+                                                "保存",
+                                                color_scheme="green",
+                                                cursor="pointer",
+                                                on_click=BotState.save_token,
+                                            ),
+                                            rx.button(
+                                                "测试连接",
+                                                variant="outline",
+                                                cursor="pointer",
+                                                on_click=BotState.test_connection,
+                                            ),
+                                            rx.button(
+                                                "取消",
+                                                variant="ghost",
+                                                cursor="pointer",
+                                                on_click=BotState.cancel_token,
+                                            ),
+                                            spacing="2",
+                                        ),
+                                        rx.cond(
+                                            BotState.test_result == "testing",
+                                            rx.callout("正在测试连接...", color_scheme="gray", width="100%"),
+                                        ),
+                                        rx.cond(
+                                            BotState.test_result == "success",
+                                            rx.callout("连接成功！Token 有效", color_scheme="green", width="100%"),
+                                        ),
+                                        rx.cond(
+                                            BotState.test_result == "failed",
+                                            rx.callout(BotState.test_message, color_scheme="red", width="100%"),
+                                        ),
+                                        spacing="2",
+                                        width="100%",
+                                    ),
+                                    # 展示态
+                                    rx.hstack(
+                                        rx.vstack(
+                                            rx.text("Bot Token", font_size="sm", color="var(--gray-11)"),
+                                            rx.cond(
+                                                BotState.has_token,
+                                                rx.hstack(
+                                                    rx.icon("shield-check", size=14, color="var(--grass-9)"),
+                                                    rx.text("•••••••• 已配置", font_size="md"),
+                                                    spacing="2",
+                                                    align="center",
+                                                ),
+                                                rx.text("未配置", font_size="md", color="var(--gray-9)"),
+                                            ),
+                                            spacing="1",
+                                            align="start",
+                                        ),
+                                        rx.spacer(),
+                                        rx.icon_button(
+                                            "pencil",
+                                            on_click=BotState.edit_token,
+                                            size="2",
+                                            variant="ghost",
+                                            color_scheme="gray",
+                                            cursor="pointer",
+                                            aria_label="编辑 Token",
+                                        ),
+                                        align="center",
+                                        width="100%",
+                                    ),
+                                ),
+                                spacing="6",
+                                width="100%",
+                            ),
+                            rx.text("请选择左侧的机器人", color="var(--gray-9)"),
+                        ),
+                        rx.spacer(),
+                        rx.dialog.close(
+                            rx.button("关闭", variant="soft", color_scheme="gray", cursor="pointer"),
+                        ),
+                        spacing="4",
+                        width="360px",
+                        padding_left="3",
+                        padding_top="2",
+                    ),
+                    spacing="5",
+                    align="start",
                     width="100%",
                 ),
-                # Bot Token
+                spacing="5",
+                max_width="760px",
+                padding="6",
+            ),
+            open=BotState.show_manager,
+            on_open_change=BotState.handle_manager_change,
+        ),
+        # ════ 二级弹窗：新增机器人 ════
+        rx.dialog.root(
+            rx.dialog.content(
+                rx.dialog.title("新增机器人"),
+                rx.dialog.description(
+                    "填写机器人名称与 Token，保存后该机器人会出现在左侧列表中",
+                    size="2",
+                    margin_bottom="5",
+                ),
                 rx.vstack(
-                    rx.text("Bot Token", font_weight="bold", font_size="sm"),
-                    rx.text(
-                        "在 Discord Developer Portal → Bot 页面获取",
-                        font_size="xs",
-                        color="gray",
-                    ),
+                    rx.text("机器人名称", font_size="sm", color="var(--gray-11)"),
                     rx.input(
-                        placeholder="输入你的 Bot Token...",
-                        value=BotState._bot_token_input,
-                        on_change=BotState.set_bot_token,
+                        placeholder="例如：我的交易Bot",
+                        value=BotState.add_name_input,
+                        on_change=BotState.set_add_name,
+                        width="100%",
+                    ),
+                    rx.text("Bot Token（可选，留空可稍后在配置中填写）", font_size="sm", color="var(--gray-11)"),
+                    rx.input(
+                        placeholder="输入或更新你的 Bot Token...",
+                        value=BotState.add_token_input,
+                        on_change=BotState.set_add_token,
                         type="password",
                         width="100%",
                     ),
-                    spacing="1",
+                    rx.cond(
+                        BotState.add_toast != "",
+                        rx.callout(BotState.add_toast, color_scheme="red", width="100%"),
+                    ),
+                    rx.hstack(
+                        rx.button(
+                            "保存",
+                            color_scheme="green",
+                            cursor="pointer",
+                            on_click=BotState.confirm_add,
+                        ),
+                        rx.button(
+                            "取消",
+                            variant="ghost",
+                            cursor="pointer",
+                            on_click=BotState.cancel_add,
+                        ),
+                        rx.spacer(),
+                        spacing="2",
+                        width="100%",
+                    ),
+                    spacing="3",
                     width="100%",
                 ),
-                # 按钮
-                rx.hstack(
-                    rx.button(
-                        "保存设置",
-                        color_scheme="green",
-                        cursor="pointer",
-                        on_click=BotState.save_bot,
-                    ),
-                    rx.button(
-                        "测试连接",
-                        variant="outline",
-                        cursor="pointer",
-                        on_click=BotState.test_connection,
-                    ),
-                    rx.spacer(),
-                    rx.dialog.close(
-                        rx.button("取消", variant="soft", color_scheme="gray", cursor="pointer"),
-                    ),
-                    spacing="2",
-                    width="100%",
-                ),
-                # 测试结果
-                rx.cond(
-                    BotState.test_result == "testing",
-                    rx.callout("正在测试连接...", color_scheme="gray", width="100%"),
-                ),
-                rx.cond(
-                    BotState.test_result == "success",
-                    rx.callout("连接成功！Token 有效", color_scheme="green", width="100%"),
-                ),
-                rx.cond(
-                    BotState.test_result == "failed",
-                    rx.callout(BotState.test_message, color_scheme="red", width="100%"),
-                ),
-                spacing="3",
-                width="100%",
+                spacing="5",
+                max_width="460px",
+                padding="6",
             ),
-            max_width="460px",
+            open=BotState.show_add_dialog,
+            on_open_change=BotState.add_dialog_open_change,
         ),
-        open=BotState.show_settings,
-        on_open_change=BotState.handle_settings_change,
     )
 
 
@@ -244,7 +564,7 @@ def sidebar_bottom() -> rx.Component:
                 color="var(--gray-9)",
             ),
         ),
-        # 图标按钮：设置 + 日夜模式
+        # 图标按钮：设置（机器人管理） + 日夜模式
         rx.hstack(
             rx.icon_button(
                 rx.icon("settings", size=18),
@@ -426,8 +746,8 @@ def with_sidebar(content: rx.Component) -> rx.Component:
                 box_shadow="0 2px 8px rgba(0,0,0,0.2)",
             ),
         ),
-        # 设置弹窗（全局存在）
-        bot_settings_dialog(),
+        # 统一机器人管理弹窗（全局存在）
+        bot_manager_dialog(),
         # 布局容器：从左到右连续铺同一渐变，避免断层
         class_name="iip-layout",
         width="100%",

@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from shared_lib import crud
 import logging
 import asyncio
@@ -13,9 +13,24 @@ class EventsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        # cog_load 是 async 上下文，此时事件循环已存在，可用 asyncio.create_task。
+        # 心跳作为独立后台任务启动，不依赖 on_ready 的同步流程是否走完，
+        # 保证在线状态始终能及时上报（on_ready 里同步频道/成员可能较耗时）。
+        try:
+            asyncio.create_task(self._heartbeat_runner())
+        except Exception as e:
+            log.warning(f"[心跳] 任务创建失败: {e}")
+
     @commands.Cog.listener()
     async def on_ready(self):
-        bot_id = crud.DEFAULT_BOT_ID  # 与 Dashboard 统一使用 default_bot
+        bot_id = getattr(self.bot, "bot_id", crud.DEFAULT_BOT_ID)
+
+        # 成功上线：清除上一次的启动失败记录，让后台展示在线状态
+        try:
+            crud.set_bot_error(bot_id, None)
+        except Exception:
+            pass
 
         # ── 首次心跳：上报在线 + 延迟 ──
         latency_ms = int(self.bot.latency * 1000) if self.bot.latency is not None else None
@@ -101,18 +116,25 @@ class EventsCog(commands.Cog):
         except Exception as e:
             print(f"同步斜杠命令失败: {e}")
 
-        # ── 启动心跳循环（事件循环已就绪，这里才是安全的启动时机）──
-        if not self._heartbeat_loop.is_running():
-            self._heartbeat_loop.start()
+    async def _heartbeat_runner(self):
+        """独立心跳后台任务：等待登录就绪后立即上报一次，随后按固定间隔持续上报。
 
-    @tasks.loop(seconds=HEARTBEAT_INTERVAL_SECONDS)
-    async def _heartbeat_loop(self):
-        """定时心跳：持续上报在线状态与延迟（只做心跳，不做其他事）"""
+        之所以独立于 on_ready：on_ready 中的频道/成员同步可能耗时较长，
+        若心跳放在 on_ready 末尾，同步卡住时心跳就永远不会启动。
+        """
         try:
-            latency_ms = int(self.bot.latency * 1000) if self.bot.latency is not None else None
-            crud.update_bot_heartbeat(crud.DEFAULT_BOT_ID, latency_ms=latency_ms)
+            await self.bot.wait_until_ready()
         except Exception as e:
-            log.warning(f"心跳上报失败: {e}")
+            log.warning(f"[心跳] wait_until_ready 失败: {e}")
+            return
+        while True:
+            try:
+                bot_id = getattr(self.bot, "bot_id", crud.DEFAULT_BOT_ID)
+                latency_ms = int(self.bot.latency * 1000) if self.bot.latency is not None else None
+                crud.update_bot_heartbeat(bot_id, latency_ms=latency_ms)
+            except Exception as e:
+                log.warning(f"[心跳] 上报失败: {e}")
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 
 async def setup(bot: commands.Bot):
